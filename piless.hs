@@ -29,14 +29,14 @@ eval t = case t of
 type Context = [(String, Term)]
 
 infer :: Context -> Term -> Term 
-infer ctx t = case (trace (show t) t) of
+infer ctx t = case t of
   Var x -> maybe (error $ "Unbound variable: " ++ x) id $ lookup x ctx
   Lam x t b -> case (infer ctx t, infer ((x,t):ctx) b) of
     (Type k1, Type k2) -> Type (max k1 k2)
     (Type k1, tau) -> Lam x t tau
     (tt, bt) -> error $ "Expected universe, got: " ++ show tt
   App m n -> case (infer ctx m, infer ctx n) of
-    (Lam x t b, nt) | t == nt -> subst x n b
+    (Lam x t b, nt) | eval t == eval nt -> subst x n b
     (Lam x t b, nt) -> error $ show t ++ " <> " ++ show nt
     (mt, nt) -> error $ "Expected forall, got: " ++ show mt 
   Type k -> Type $ S k
