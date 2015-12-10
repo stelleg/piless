@@ -1,0 +1,5 @@
+{
+  Id : * = ∀a:*,∀x:a,a
+  id : Id = λa:*.λx:a.x
+}
+(id Id id)

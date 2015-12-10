@@ -1,0 +1,8 @@
+{
+  Eq : ∀a:*,∀x:a,∀y:a,* = λa:*.λx:a.λy:a.∀c:*,∀f:∀x:a,c,c
+  eq : ∀a:*,∀x:a,(Eq a x x) = λa:*.λx:a.λc:*.λf:∀x:a,c.(f x)
+  Id : * = ∀a:*,∀x:a,a
+  id : Id = λa:*.λx:a.x
+  idEqid : (Eq Id id (id Id id)) = (eq Id id)
+}
+idEqid

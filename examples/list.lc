@@ -1,0 +1,10 @@
+{
+  Id : * = ∀a:*,∀x:a,a
+  id : Id = λa:*.λx:a.x
+  list : ∀a:*, * = λa:*.∀l:*,∀n:l,∀c:∀tt:*,∀h:a,∀t:tt,l,l 
+  cons : ∀a:*,∀h:a,∀tt:*,∀t:tt,(list a) = λa:*.λh:a.λtt:*.λt:tt.λl:*.
+    λn:l.λc:∀tt:*,∀h:a,∀t:tt,l.(c tt h t)
+  nil : ∀a:*,(list a) = λa:*.λl:*.
+    λn:l.λc:∀tt:*,∀h:a,∀t:tt,l.n
+}
+(cons Id id (list Id) (nil Id))
