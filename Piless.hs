@@ -1,16 +1,31 @@
 module Piless where
+import Nat
+import qualified DB
 import Debug.Trace
 
 data Term = Var String 
-          | Pi String Term Term
-          | Lam String Term Term
+          | Lam Bool String Term Term
           | Type N 
           | App Term Term
-          deriving (Eq)
+
+-- Equality is equality of deBruijn terms
+instance Eq Term where
+  a == b = db a == db b
+
+-- Turns a closed term into deBruijn notation, returns unbound variable name in
+-- failure
+db :: Term -> Either String DB.Term 
+db t = f t []  where  
+  f :: Term -> [(String, Int)] -> Either String DB.Term 
+  f t e = case t of
+    Var v -> maybe (Left $ "unbound var: " ++  v) (Right . DB.Var) $ lookup v e
+    Lam pi v tau b -> DB.Lam pi <$> f tau e <*> f b ((v, 0):map (fmap succ) e)
+    Type n -> pure $ DB.Type n
+    App m n -> DB.App <$> f m e <*> f n e
 
 instance Show Term where
-  show (Lam v tau b) = "λ" ++ v ++ ":" ++ show tau ++ "." ++ show b 
-  show (Pi v tau b) = "∀" ++ v ++ ":" ++ show tau ++ "," ++ show b 
+  show (App (Lam False v tau b) e) = "let " ++ v ++ " : " ++ show tau ++ " = " ++ show e ++ " in \n" ++ show b 
+  show (Lam pi v tau b) = (if pi then "∀" else "λ") ++ v ++ ":" ++ show tau ++ "." ++ show b 
   show (App m n) = "(" ++ show m ++ " " ++ show n ++ ")"
   show (Type n) = "*"
   show (Var v) = v
@@ -18,8 +33,7 @@ instance Show Term where
 subst :: String -> Term -> Term -> Term
 subst x t e = case e of
   Var v | x == v -> t
-  Pi v t' b -> Pi v (subst x t t') $ if x /= v then subst x t b else b
-  Lam v t' b -> Lam v (subst x t t') $ if x /= v then subst x t b else b
+  Lam pi v t' b -> Lam pi v (subst x t t') $ if x /= v then subst x t b else b
   App m n -> App (subst x t m) (subst x t n)
   _ -> e
 
@@ -29,12 +43,10 @@ eval c@(Close t ctx) = case t of
     Nothing -> error ("unbound variable lookup " ++ show v) --error $ "Unbound variable in evaluation: " ++ v 
     Just (Just c, _) -> eval c
     Just (Nothing, _) -> {-trace ("context only type for " ++ v)-} c -- error $ "evaluating unbound term variable: " ++ v
-  Lam x tau b -> Close (Lam x (tm $ eval (Close tau ctx)) 
+  Lam pi x tau b -> Close (Lam pi x (tm $ eval (Close tau ctx)) 
                               (tm $ eval (Close b $ (x,(Nothing, Close tau ctx)):ctx))) ctx 
-  Pi x tau b -> Close (Pi x (tm $ eval (Close tau ctx)) 
-                            (tm $ eval (Close b $ (x,(Nothing, Close tau ctx)):ctx))) ctx 
   App m n -> case eval $ Close m ctx of 
-    Close (Lam x tau b) ctx' -> eval $ Close b ((x,(Just (Close n ctx), Close tau ctx')):ctx') 
+    Close (Lam False x tau b) ctx' -> eval $ Close b ((x,(Just (Close n ctx), Close tau ctx')):ctx') 
     l -> error $ "Expected function, got: " ++ show l
   _ -> c 
 
@@ -52,11 +64,11 @@ instance Show Closure where
 
 force :: Closure -> Either Error Closure
 force c = let Close t ctx = c in case t of 
-  Lam v t b -> do
+  Lam False v t b -> do
     Close b' ctx' <- force =<< infer (Close b ((v,(Nothing, Close t ctx)):ctx))
-    return $ Close (Pi v t b') ctx
+    return $ Close (Lam True v t b') ctx
+  Lam True v t b -> pure c
   Type k -> pure c 
-  Pi v t b -> pure c 
   Var v -> pure c 
   t -> err $ "Forcing non-value: " ++ show t
 
@@ -67,12 +79,10 @@ infer c@(Close t ctx) = case {-trace (show c)-} t of
     n' <- force =<< infer (Close n ctx)
     Close l ctx' <- infer (Close m ctx)
     case l of
-      Pi v t b | tm (eval (Close t ctx')) == tm (eval n') -> pure $ Close b ((v,(Just (Close n ctx), n')):ctx')
-      Pi v t b -> err $ show (tm (eval (Close t ctx'))) ++ " <> " ++ show (tm (eval n'))
-      Lam v t b | tm (eval (Close t ctx')) == tm (eval n') -> infer (Close b ((v,(Just (Close n ctx), n')):ctx'))
-      Lam v t b -> err $ show (tm (eval (Close t ctx'))) ++ " <> " ++ show (tm (eval n'))
+      Lam pi v t b | tm (eval (Close t ctx')) == tm (eval n') -> (if pi then pure else infer) $ Close b ((v,(Just (Close n ctx), n')):ctx')
+      Lam pi v t b -> err $ show (tm (eval (Close t ctx'))) ++ " ≠ " ++ show (tm (eval n'))
       e -> err $ "Expected value, got: " ++ show e
-  Pi v t b -> do
+  Lam True v t b -> do
     tt <- infer (Close t ctx) 
     bt <- infer (Close b ((v,(Nothing, Close t ctx)):ctx))
     case (tm tt,tm bt) of
@@ -80,6 +90,35 @@ infer c@(Close t ctx) = case {-trace (show c)-} t of
       _ -> err $ "Expected *, *, got: " ++ show (tm tt) ++ ", " ++ show (tm bt)
   _ -> pure c
 
+
+-- Synthesis takes a type and returns one of three options:
+--    1. A term of that type
+--    2. A term of not (that type)
+--    3. Failure to find either
+
+-- Naive approach :: 
+synthesize :: Int -> Term -> Either String [DB.Term]
+synthesize n t = case db t of 
+  Left s -> Left s 
+  Right dbt -> (case filter f $ bfs n of
+    [] -> Left "no solutions"
+    xs -> Right xs) where  
+      f t' = case DB.infer (DB.Close t' []) of
+        Left _ -> False
+        Right tau -> tau == DB.Close dbt [] || tau == DB.Close (DB.Lam True dbt (DB.Lam True (DB.Type 0) (DB.Var 0))) []
+
+-- Checks all terms of size n to find one that satisfies the condition
+bfs :: Int -> [DB.Term]
+bfs n = f 0 n where
+  f :: Int -> Int -> [DB.Term]
+  f i 0 = []
+  f i n = map DB.Var [0..(i-1)] ++ 
+        map (uncurry (DB.Lam True)) [(tau, b) | tau <- f i (n-1), b <- f (i+1) (n-1)] ++ 
+        map (uncurry (DB.Lam False)) [(tau, b) | tau <- f i (n-1), b <- f (i+1) (n-1)] ++ 
+        map (uncurry DB.App) [(m, n) | m <- f i (n-1), n <- f i (n-1)] ++ 
+        [DB.Type 0]
+       
+  
 {-
 infer :: Closure -> [Closure] -> Either Error (Either Closure Closure)
 infer c@(Close t ctx) st = case {-trace (show c)-} t of
@@ -120,49 +159,4 @@ infer c@(Close t ctx) st = case {-trace (show c)-} t of
 
 inf :: Term -> Either String Closure
 inf t =  eval <$> (force =<< infer (Close t []))
-
-data N = Z | S N
-
-instance Num N where
-  fromInteger 0 = Z
-  fromInteger n = S $ fromInteger $ pred n
-  abs = id
-  Z + n = n
-  S n + m = S (n + m)
-  Z * n = Z
-  S Z * n = n
-  S n * m = (n * m) + m
-  signum = const 1
-  negate = id
-  Z - n = Z
-  n - Z = n
-  S n - S m = n - m
-
-instance Eq N where
-  S m == S n = m == n
-  Z == S n = False
-  S n == Z = False
-  Z == Z = True
-
-instance Ord N where
-  compare (S n) (S m) = compare n m
-  compare Z (S n) = LT
-  compare (S n) Z = GT
-  compare Z Z = EQ
-
-instance Enum N where
-  succ = S
-  pred (S n) = n
-  pred Z = Z
-  toEnum 0 = Z
-  toEnum n = S $ toEnum $ pred n
-  fromEnum (S n) = 1 + fromEnum n
-  fromEnum Z = 0
-
-instance Show N where
-  show = show . fromEnum 
-  
-  
-
-
 

@@ -27,8 +27,8 @@ parseFile :: String -> IO Term
 parseFile s = parseProgram <$> readFile s
 
 lc :: Parser Term
-lc =  Lam <$> ((char '\\' <|> char 'λ') ^> (word <^ char ':')) <^> (lc <^ char '.')  <^> lc
-  <|> Pi <$> (char '∀' ^> (word <^ char ':')) <^> (lc <^ char ',')  <^> lc
+lc =  Lam False <$> ((char '\\' <|> char 'λ') ^> (word <^ char ':')) <^> (lc <^ char '.')  <^> lc
+  <|> Lam True <$> (char '∀' ^> (word <^ char ':')) <^> (lc <^ char ',')  <^> lc
   <|> Type . toEnum . const 0 <$> (char '*') -- ^> decim)
   <|> Var <$> word
   <|> char '(' ^> (foldl1 App <$> many1 (notCode *> lc <* notCode)) <^ char ')'
@@ -36,5 +36,5 @@ lc =  Lam <$> ((char '\\' <|> char 'λ') ^> (word <^ char ':')) <^> (lc <^ char 
   <|> char '{' ^> (lets <$> many (notCode *> binding <* notCode) <^> (char '}' ^> lc))
   where lets = flip $ foldr ($) 
         binding = mylet <$> word <^> (char ':' ^> lc) <^> (char '=' ^> lc)
-        mylet var ty term body = App (Lam var ty body) term
+        mylet var ty term body = App (Lam False var ty body) term
 
